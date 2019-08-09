@@ -1,32 +1,42 @@
 VERSION 1.0 CLASS
 BEGIN
   MultiUse = -1  'True
+  Persistable = 0  'NotPersistable
+  DataBindingBehavior = 0  'vbNone
+  DataSourceBehavior  = 0  'vbNone
+  MTSTransactionMode  = 0  'NotAnMTSObject
 END
 Attribute VB_Name = "TreeMap"
 Attribute VB_GlobalNameSpace = False
 Attribute VB_Creatable = False
 Attribute VB_PredeclaredId = False
 Attribute VB_Exposed = False
-
 Option Explicit
 
-Public Enum TMDupesMode
-    TMIgnoreDupes
-    TMErrorDupes
-    TMOverwriteDupes
+Public Enum TreeMapDuplicationMode
+    TreeMapDuplicationMode_Ignore
+    TreeMapDuplicationMode_RaiseError
+    TreeMapDuplicationMode_Overwrite
 End Enum
 
-Private root As TreeNode
-Private dupemode As TMDupesMode
-Private lcount As Long
+Private m_root As TreeMapNode
+Private m_duplication_mode As TreeMapDuplicationMode
+Private m_count As Long
+Private m_key_comparator As IVariantComparator
+
+Private Sub Class_Initialize()
+    m_duplication_mode = TreeMapDuplicationMode_RaiseError
+    m_count = 0
+    Set m_key_comparator = New SimpleVariantComparator
+End Sub
 
 Public Function _
-add(key As Variant, value As Variant) As TreeNode
-    Dim N As TreeNode
+add(key As Variant, value As Variant) As TreeMapNode
+    Dim N As TreeMapNode
     'Debug.Print "add key " & key
     Set N = rb_insert(key)
     If Not (N Is Nothing) Then
-        lcount = count + 1
+        m_count = m_count + 1
         If (IsObject(value)) Then
             Set N.payload = value
         Else
@@ -37,11 +47,11 @@ add(key As Variant, value As Variant) As TreeNode
 End Function
 
 Public Function _
-find(key As Variant) As TreeNode
-    Dim at As TreeNode
-    Set at = root
+find(key As Variant) As TreeMapNode
+    Dim at As TreeMapNode
+    Set at = m_root
     Do While Not (at Is Nothing)
-        Select Case cmp_key(key, at.key)
+        Select Case m_key_comparator.compare(key, at.key)
             Case 0:
                 Set find = at
                 Exit Function
@@ -55,50 +65,63 @@ End Function
 
 Public Property Get _
 count() As Long
-    count = lcount
+    count = m_count
 End Property
 
 Public Property Get _
-duplicates() As TMDupesMode
-    duplicates = dupemode
+duplication_mode() As TreeMapDuplicationMode
+    duplication_mode = m_duplication_mode
 End Property
 
 Public Property Let _
-duplicates(value As TMDupesMode)
-    dupemode = value
+duplication_mode(a_duplicaiton_mode As TreeMapDuplicationMode)
+    m_duplication_mode = a_duplicaiton_mode
 End Property
 
-Public Sub _
-remove(key As Variant)
-    Dim N As TreeNode
-    Set N = find(key)
-    If (N Is Nothing) Then Err.Raise 9, "TreeMap.Remove", "key not found"
-    remove_node N
-    lcount = lcount - 1
-End Sub
+Public Property Get _
+key_comparator() As IVariantComparator
+    Set key_comparator = m_key_comparator
+End Property
+
+Public Property Set _
+key_comparator(a_key_comparator As IVariantComparator)
+    Set m_key_comparator = a_key_comparator
+End Property
 
 Public Function _
-inorder(Optional from_key As Variant) As TreeInorderCursor
-    Set inorder = New TreeInorderCursor
-    If (Not IsError(from_key)) Then
+remove(key As Variant) As TreeMapNode
+    Dim N As TreeMapNode
+    Set N = find(key)
+    If Not (N Is Nothing) Then
+        remove_node N
+        m_count = m_count - 1
+    End If
+    Set remove = N
+End Function
+
+Public Function _
+create_in_order_cursor(Optional from_key As Variant = Nothing) As TreeMapInOrderCursor
+    Dim inorder As New TreeMapInOrderCursor
+    If Not (from_key Is Nothing) Then
         inorder.start find(from_key)
     Else
-        inorder.start root
+        inorder.start m_root
     End If
+    Set create_in_order_cursor = inorder
 End Function
 
 Public Sub _
-dump(Optional N As TreeNode)
-    Open ThisWorkbook.Path & "\tree.txt" For Output As #1
+dump(path As String, Optional N As TreeMapNode)
+    Open path For Output As #1
     do_dump N, 0
     Close #1
 End Sub
 
 Private Sub _
-do_dump(Optional N As TreeNode, Optional depth As Long = 0)
-    Dim spacer As String, M As TreeNode, last As Long, keystr As String
+do_dump(Optional N As TreeMapNode, Optional depth As Long = 0)
+    Dim spacer As String, M As TreeMapNode, last As Long, keystr As String
     Dim blacks As Long
-    If (N Is Nothing) Then Set N = root
+    If (N Is Nothing) Then Set N = m_root
     If Not (N.left Is Nothing) Then
         do_dump N.left, depth + 1
     End If
@@ -150,8 +173,8 @@ End Sub
 
 ' left rotation, ie.:
 ' (N N.left (M M.left M.right)) -> (M (N N.left M.left) M.right)
-Private Sub left_rotate(N As TreeNode)
-    Dim M As TreeNode
+Private Sub left_rotate(N As TreeMapNode)
+    Dim M As TreeMapNode
     Set M = N.right
     Set N.right = M.left
     If Not (M.left Is Nothing) Then
@@ -159,7 +182,7 @@ Private Sub left_rotate(N As TreeNode)
     End If
     Set M.parent = N.parent
     If (N.parent Is Nothing) Then
-        Set root = M
+        Set m_root = M
     Else
         If (N Is N.parent.left) Then
             Set N.parent.left = M
@@ -173,8 +196,8 @@ End Sub
 
 ' right rotation, ie.:
 ' (N (M M.left M.right) N.right) -> (M M.left (N M.right N.right))
-Private Sub right_rotate(N As TreeNode)
-    Dim M As TreeNode
+Private Sub right_rotate(N As TreeMapNode)
+    Dim M As TreeMapNode
     Set M = N.left
     Set N.left = M.right
     If Not (M.right Is Nothing) Then
@@ -182,7 +205,7 @@ Private Sub right_rotate(N As TreeNode)
     End If
     Set M.parent = N.parent
     If (N.parent Is Nothing) Then
-        Set root = M
+        Set m_root = M
     Else
         If (N Is N.parent.left) Then
             Set N.parent.left = M
@@ -195,77 +218,37 @@ Private Sub right_rotate(N As TreeNode)
 End Sub
 
 Private Function _
-cmp_key(key1 As Variant, key2 As Variant) As Long
-    Dim i As Long, offset As Long
-    If (IsArray(key1)) Then
-        If (IsArray(key2)) Then
-            offset = LBound(key2) - LBound(key1)
-            For i = LBound(key1) To WorksheetFunction.Min(UBound(key1), UBound(key2) + offset)
-                If (key1(i) < key2(i + offset)) Then
-                    cmp_key = -1
-                    Exit Function
-                ElseIf (key1(i) > key2(i + offset)) Then
-                    cmp_key = 1
-                    Exit Function
-                End If
-            Next i
-            If (UBound(key1) < UBound(key2) + offset) Then
-                cmp_key = -1
-            ElseIf (UBound(key1) > UBound(key2) + offset) Then
-                cmp_key = 1
-            Else
-                cmp_key = 0
-            End If
-        Else
-            cmp_key = -1
-        End If
-    Else
-        If (IsArray(key2)) Then
-            cmp_key = 1
-        Else
-            If (key1 < key2) Then
-                cmp_key = -1
-            ElseIf (key1 = key2) Then
-                cmp_key = 0
-            Else
-                cmp_key = 1
-            End If
-        End If
-    End If
-End Function
-
-Private Function _
-tree_insert(key As Variant) As TreeNode
-    Dim at As TreeNode, last As TreeNode
-    Set at = root: Set last = Nothing
+tree_insert(key As Variant) As TreeMapNode
+    Dim at As TreeMapNode, last As TreeMapNode
+    Set at = m_root: Set last = Nothing
     Do While Not (at Is Nothing)
         Set last = at
-        Select Case cmp_key(key, at.key)
+        Select Case m_key_comparator.compare(key, at.key)
             Case -1: Set at = at.left
             Case 1: Set at = at.right
             Case 0:
-                Select Case (dupemode)
-                    Case TMErrorDupes:
+                Select Case (m_duplication_mode)
+                    Case TreeMapDuplicationMode_RaiseError:
                         Err.Raise 9, "TreeMap.tree_insert()", "Key already exists"
-                    Case TMIgnoreDupes:
+                    Case TreeMapDuplicationMode_Ignore:
                         Exit Function
-                    Case TMOverwriteDupes:
+                    Case TreeMapDuplicationMode_Overwrite:
                         Set tree_insert = at
                         Exit Function
                 End Select
         End Select
     Loop
     If (last Is Nothing) Then
-        Set root = New TreeNode
-        root.key = key
-        Set tree_insert = root
+        Set m_root = New TreeMapNode
+        m_root.key = key
+        Set tree_insert = m_root
         Exit Function
     Else
-        Set at = New TreeNode
+        Set at = New TreeMapNode
         Set at.parent = last
         at.key = key
         Set tree_insert = at
-        Select Case cmp_key(key, last.key)
+        Select Case m_key_comparator.compare(key, last.key)
             Case -1: Set last.left = at
             Case 1: Set last.right = at
             Case Else: Stop
@@ -274,7 +257,7 @@ tree_insert(key As Variant) As TreeNode
 End Function
 
 Private Function _
-grandparent(N As TreeNode) As TreeNode
+grandparent(N As TreeMapNode) As TreeMapNode
     Set grandparent = Nothing
     If Not (N.parent Is Nothing) Then
         Set grandparent = N.parent.parent
@@ -282,8 +265,8 @@ grandparent(N As TreeNode) As TreeNode
 End Function
 
 Private Function _
-uncle(N As TreeNode) As TreeNode
-    Dim gp As TreeNode
+uncle(N As TreeMapNode) As TreeMapNode
+    Dim gp As TreeMapNode
     Set gp = grandparent(N)
     Set uncle = Nothing
     If Not (gp Is Nothing) Then
@@ -296,7 +279,7 @@ uncle(N As TreeNode) As TreeNode
 End Function
 
 Private Function _
-sibling(N As TreeNode) As TreeNode
+sibling(N As TreeMapNode) As TreeMapNode
     If (N Is N.parent.left) Then
         Set sibling = N.parent.right
     Else
@@ -305,19 +288,19 @@ sibling(N As TreeNode) As TreeNode
 End Function
 
 Private Function _
-rb_insert(key As Variant) As TreeNode
-    Dim N As TreeNode, U As TreeNode, G As TreeNode
+rb_insert(key As Variant) As TreeMapNode
+    Dim N As TreeMapNode, U As TreeMapNode, G As TreeMapNode
 
     Set N = tree_insert(key)
     If (N Is Nothing) Then Exit Function
     Set rb_insert = N
-    
+
     ' node already existed and payload was overwritten by tree_insert()
     If (Not N.left Is Nothing) Or (Not N.right Is Nothing) Then Exit Function
 
     N.color = 1
     Do While True
-        If (N Is root) Then Exit Do
+        If (N Is m_root) Then Exit Do
         If (N.parent.color <> 1) Then Exit Do
         Set U = uncle(N)
         Set G = grandparent(N)
@@ -346,11 +329,11 @@ rb_insert(key As Variant) As TreeNode
                 Set N = G
         End Select
     Loop
-    root.color = 0
+    m_root.color = 0
 End Function
 
 Private Sub _
-replace_node(dest As TreeNode, src As TreeNode)
+replace_node(dest As TreeMapNode, src As TreeMapNode)
     If (src Is Nothing) Then
         dest.key = Empty
         dest.payload = Empty
@@ -366,10 +349,10 @@ replace_node(dest As TreeNode, src As TreeNode)
 End Sub
 
 Private Sub _
-unlink_node(N As TreeNode)
+unlink_node(N As TreeMapNode)
     If (N Is Nothing) Then Exit Sub
     If (N.parent Is Nothing) Then
-        Set root = Nothing
+        Set m_root = Nothing
         Exit Sub
     End If
     If (N Is N.parent.left) Then
@@ -381,7 +364,7 @@ unlink_node(N As TreeNode)
 End Sub
 
 Private Function _
-get_color(N As TreeNode) As Long
+get_color(N As TreeMapNode) As Long
     If (N Is Nothing) Then
         get_color = 0
     Else
@@ -390,7 +373,7 @@ get_color(N As TreeNode) As Long
 End Function
 
 Private Sub _
-set_color(N As TreeNode, color As Long)
+set_color(N As TreeMapNode, color As Long)
     If (N Is Nothing) Then
         If (color = 0) Then Exit Sub Else Stop 'trying to repaint a leaf red
     End If
@@ -398,11 +381,11 @@ set_color(N As TreeNode, color As Long)
 End Sub
 
 Private Sub _
-remove_node(N As TreeNode)
-    Dim C As New TreeInorderCursor, child As TreeNode, S As TreeNode
-    
+remove_node(N As TreeMapNode)
+    Dim C As New TreeMapInOrderCursor, child As TreeMapNode, S As TreeMapNode
+
     If ((Not N.left Is Nothing) And (Not N.right Is Nothing)) Then
-        Set C = New TreeInorderCursor
+        Set C = New TreeMapInOrderCursor
         C.start N
         Set child = C.prev_node()
         replace_node N, child
